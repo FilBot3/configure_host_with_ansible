@@ -1,0 +1,270 @@
+---
+- name: Setup Silverblue/Kinoite rpm-ostree
+  hosts: '{{ host_grp | default("localhost") }}'
+  gather_facts: true
+  tags:
+    - ostree
+  tasks:
+    - name: Add Flatpak Stable Repo for User
+      community.general.flatpak_remote:
+        name: flathub
+        flatpackrepo_url: https://dl.flathub.org/repo/flathub.flatpakrepo
+        state: present
+    - name: Add Flatpak Beta Repo for User
+      community.general.flatpak_remote:
+        name: flathub-beta
+        flatpackrepo_url: https://dl.flathub.org/beta-repo/flathub-beta.flatpakrepo
+        state: present
+    - name: 'Install Flatpak: {{ item }}'
+      community.general.flatpak:
+        name: '{{ item.name }}'
+        remote: '{{ item.remote }}'
+        state: present
+      loop:
+        - name: com.github.tchx84.Flatseal
+          remote: flathub
+        - name: com.microsoft.Teams
+          remote: flathub
+        - name: com.google.Chrome
+          remote: flathub-beta
+    - name: 'Install rpm-ostree package: {{ item }}'
+      community.general.rpm_ostree_pkg:
+        state: present
+        name: '{{ item }}'
+      become: true
+      become_user: root
+      become_method: sudo
+      loop:
+        - podman
+        - buildah
+        - skopeo
+        - toolbox
+        - zsh
+        - tmux
+        - neovim
+        - fd-find
+        - ripgrep
+    - name: Setup local folders
+      ansible.builtin.file:
+        state: directory
+        path: '{{ ansible_user_dir }}/{{ item }}'
+      loop:
+        - '.local/applications'
+        - '.local/icons'
+    - name: Configure com.google.Chrome permissions
+      ansible.builtin.shell:
+        cmd: |
+          flatpak --user override --filesystem=~/.local/share/applications com.google.Chrome
+          flatpak --user override --filesystem=~/.local/share/icons com.google.Chrome
+
+- name: Build Universal-ctags
+  hosts: '{{ host_grp | default("localhost") }}'
+  gather_facts: true
+  tags:
+    - ctags
+  tasks:
+    - name: Checkout github universal-ctags/ctags
+      ansible.builtin.git:
+        repo: https://github.com/universal-ctags/ctags.git
+        dest: '{{ ansible_user_dir }}/universal-ctags'
+    - name: Install Fedora Dependencies
+      when: ( ansible_distribution == 'Fedora' )
+      ansible.builtin.package:
+        name: '{{ item }}'
+        state: present
+      become: true
+      become_user: root
+      become_method: sudo
+      loop:
+        - gcc
+        - make
+        - pkgconfig
+        - autoconf
+        - automake
+        - python3-docutils
+        - libseccomp-devel
+        - jansson-devel
+        - libyaml-devel
+        - libxml2-devel
+    - name: Install Ubuntu Dependencies
+      when: ( ansible_distribution == 'Pop!_OS' ) or
+            ( ansible_distribution == 'Ubuntu' )
+      ansible.builtin.package:
+        name: '{{ item }}'
+        state: present
+      become: true
+      become_user: root
+      become_method: sudo
+      loop:
+        - gcc
+        - make
+        - pkg-config
+        - autoconf
+        - automake
+        - python3-docutils
+        - libseccomp-dev
+        - libjansson-dev
+        - libyaml-dev
+        - libxml2-dev
+    - name: Run autogen
+      ansible.builtin.shell:
+        cmd: './autogen.sh'
+        chdir: '{{ ansible_user_dir }}/universal-ctags'
+    - name: Run configure
+      ansible.builtin.shell:
+        cmd: './configure'
+        chdir: '{{ ansible_user_dir }}/universal-ctags'
+    - name: Run make
+      ansible.builtin.shell:
+        cmd: 'make'
+        chdir: '{{ ansible_user_dir }}/universal-ctags'
+    - name: Move the ctags binary
+      ansible.builtin.shell:
+        cmd: 'mv {{ ansible_user_dir }}/universal-ctags/ctags {{ ansible_user_dir }}/.local/bin/ctags'
+    - name: Delete the universal-ctags folders
+      ansible.builtin.file:
+        path: '{{ ansible_user_dir }}/universal-ctags'
+        state: absent
+
+- name: Install Taskfile
+  hosts: '{{ host_grp | default("localhost") }}'
+  gather_facts: true
+  tags:
+    - taskfile
+  tasks:
+    - name: Fedora tasks
+      block:
+        - name: Download task RPM
+          ansible.builtin.get_url:
+            url: https://github.com/go-task/task/releases/download/v3.9.2/task_linux_amd64.rpm
+            dest: '{{ ansible_user_dir }}/Downloads/task_linux_amd64.rpm'
+            checksum: 'sha256:08711f533b2c04e8dca5497c5cc8f3c93c6f095e7cf09528d5fa7ab133caf532'
+        - name: Install task RPM
+          ansible.builtin.yum:
+            name: '{{ ansible_user_dir }}/Downloads/task_linux_amd64.rpm'
+            state: present
+          become: true
+          become_user: root
+          become_method: sudo
+        - name: Delete task RPM
+          ansible.builtin.file:
+            path: '{{ ansible_user_dir }}/Downloads/task_linux_amd64.rpm'
+            state: absent
+      when: ( ansible_distribution == 'Fedora' )
+    - name: Ubuntu tasks
+      block:
+        - name: Download task DEB
+          ansible.builtin.get_url:
+            url: https://github.com/go-task/task/releases/download/v3.9.2/task_linux_amd64.deb
+            dest: '{{ ansible_user_dir }}/Downloads/task_linux_amd64.deb'
+            checksum: 'sha256:cb0e8dd4996f537f83bd6084f006f5c19c8d73529bd0343f1001d1cf0a4b51fc'
+        - name: Install task DEB
+          ansible.builtin.apt:
+            deb: '{{ ansible_user_dir }}/Downloads/task_linux_amd64.deb'
+            state: present
+          become: true
+          become_user: root
+          become_method: sudo
+        - name: Delete task DEB
+          ansible.builtin.file:
+            path: '{{ ansible_user_dir }}/Downloads/task_linux_amd64.deb'
+            state: absent
+      when: ( ansible_distribution == 'Pop!_OS' ) or
+            ( ansible_distribution == 'Ubuntu' )
+
+- name: Install yq
+  hosts: '{{ host_grp | default("localhost") }}'
+  gather_facts: true
+  tags:
+    - yq
+  tasks:
+    - name: Download yq
+      ansible.builtin.get_url:
+        url: https://github.com/mikefarah/yq/releases/download/v4.15.1/yq_linux_amd64
+        dest: '{{ ansible_user_dir }}/Downloads/yq_linux_amd64'
+        checksum: 'sha256:507d872f6775ccad72a5ef15f785d269e498b1e2b3774786e9ac1b5e2c9d6c3f'
+    - name: Move the yq binary
+      ansible.builtin.shell:
+        cmd: 'mv {{ ansible_user_dir }}/Downloads/yq_linux_amd64 {{ ansible_user_dir }}/.local/bin/yq'
+
+- name: Install slides
+  hosts: '{{ host_grp | default("localhost") }}'
+  gather_facts: true
+  tags:
+    - slides
+  tasks:
+    - name: Create folder to unpack slides into
+      ansible.builtin.file:
+        path: '{{ ansible_user_dir }}/Downloads/slides'
+        state: directory
+    - name: Download slides tar.gz
+      ansible.builtin.get_url:
+        url: https://github.com/maaslalani/slides/releases/download/v0.7.2/slides_0.7.2_linux_amd64.tar.gz
+        dest: '{{ ansible_user_dir }}/Downloads/slides/slides_0.7.2_linux_amd64.tar.gz'
+        checksum: 'sha256:c46e2d5bbeccaebe573e532090699d564cbbf2e09f17b8394bd90e68eeed8035'
+    - name: Unarchive slides
+      ansible.builtin.unarchive:
+        src: '{{ ansible_user_dir }}/Downloads/slides/slides_0.7.2_linux_amd64.tar.gz'
+        dest: '{{ ansible_user_dir }}/Downloads/slides'
+    - name: Move the slides binary
+      ansible.builtin.shell:
+        cmd: 'mv {{ ansible_user_dir }}/Downloads/slides/slides {{ ansible_user_dir }}/.local/bin/slides'
+    - name: Delete the slides folders
+      ansible.builtin.file:
+        path: '{{ ansible_user_dir }}/Downloads/slides'
+        state: absent
+
+- name: Install k9s
+  hosts: '{{ host_grp | default("localhost") }}'
+  gather_facts: true
+  tags:
+    - k9s
+  tasks:
+    - name: Create folder to unpack k9s into
+      ansible.builtin.file:
+        path: '{{ ansible_user_dir }}/Downloads/k9s'
+        state: directory
+    - name: Download k9s
+      ansible.builtin.get_url:
+        url: https://github.com/derailed/k9s/releases/download/v0.25.7/k9s_Linux_x86_64.tar.gz
+        dest: '{{ ansible_user_dir }}/Downloads/k9s/k9s_Linux_x86_64.tar.gz'
+        checksum: 'sha256:b37506da3a797ac3ac3ad22827cf97e1de958ea479528b41855f424d2b97920b'
+    - name: Unarchive k9s
+      ansible.builtin.unarchive:
+        src: '{{ ansible_user_dir }}/Downloads/k9s/k9s_Linux_x86_64.tar.gz'
+        dest: '{{ ansible_user_dir }}/Downloads/k9s'
+    - name: Move the k9s binary
+      ansible.builtin.shell:
+        cmd: 'mv {{ ansible_user_dir }}/Downloads/k9s/k9s {{ ansible_user_dir }}/.local/bin/k9s'
+    - name: Delete the k9s folders
+      ansible.builtin.file:
+        path: '{{ ansible_user_dir }}/Downloads/k9s'
+        state: absent
+
+- name: Install helm
+  hosts: '{{ host_grp | default("localhost") }}'
+  gather_facts: true
+  tags:
+    - helm
+  tasks:
+    - name: Create folder to unpack helm into
+      ansible.builtin.file:
+        path: '{{ ansible_user_dir }}/Downloads/helm'
+        state: directory
+    - name: Download helm
+      ansible.builtin.get_url:
+        url: https://get.helm.sh/helm-v3.7.1-linux-amd64.tar.gz
+        dest: '{{ ansible_user_dir }}/Downloads/helm/helm-v3.7.1-linux-amd64.tar.gz'
+        checksum: 'sha256:6cd6cad4b97e10c33c978ff3ac97bb42b68f79766f1d2284cfd62ec04cd177f4'
+    - name: Unarchive helm
+      ansible.builtin.unarchive:
+        src: '{{ ansible_user_dir }}/Downloads/helm/helm-v3.7.1-linux-amd64.tar.gz'
+        dest: '{{ ansible_user_dir }}/Downloads/helm'
+    - name: Move the helm binary
+      ansible.builtin.shell:
+        cmd: 'mv {{ ansible_user_dir }}/Downloads/helm/linux-amd64/helm {{ ansible_user_dir }}/.local/bin/helm'
+    - name: Delete the helm folders
+      ansible.builtin.file:
+        path: '{{ ansible_user_dir }}/Downloads/helm'
+        state: absent
+...
